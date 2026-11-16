@@ -32,9 +32,9 @@ def predict_content_type(input_data: NetFlixContent):
     return{
         "prediction": result["prediction"],
         "probability": result["probability"],
-        "content": {
-            "TV Show content detected 📺"
+        "content": (
+            "TV Show 📺"
             if result["prediction"] == 1
-            else "Movie content detected 🎥"
-        }
+            else "Movie 🎥"
+        )
     }
