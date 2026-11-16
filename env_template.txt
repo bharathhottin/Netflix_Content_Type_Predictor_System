@@ -8,7 +8,7 @@ DATASET_NAME=Dataset.csv
 LOG_NAME=app.log
 MODEL_NAME=netflix-content-type-prediction-model.joblib
 
-TARGET_COL=target
+TARGET_COL=type
 TEST_SIZE=0.15
 RANDOM_STATE=42
 
