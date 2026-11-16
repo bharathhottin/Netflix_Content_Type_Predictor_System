@@ -1,7 +1,7 @@
 PROJECT_ROOT='/absolute/path/of/project'
 
 LOG_DIR=logs
-DATASET_DIR=dataset
+DATASET_DIR=Dataset
 MODEL_DIR=model_dir
 
 DATASET_NAME=Dataset.csv

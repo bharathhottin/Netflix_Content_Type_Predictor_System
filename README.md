@@ -21,6 +21,7 @@
 - [Overview](#overview)
 - [Demo](#demo)
 - [How it works](#how-it-works)
+- [Project workflow](#project-workflow)
 - [Project structure](#project-structure)
 - [Dataset](#dataset)
 - [Model and results](#model-and-results)
@@ -78,6 +79,27 @@ flowchart LR
 ```
 
 The model is loaded from disk once when the API starts, so each request only pays for the prediction itself. Every prediction is also written to `logs/app.log`.
+
+## Project workflow
+
+Every step of the project, from the raw CSV to the deployed app. Steps 1 to 10 are in the notebook (its section numbers are shown), and steps 11 to 14 turn that work into a running application.
+
+| # | Step | What happens | Where |
+| :---: | --- | --- | --- |
+| 1 | Load the data | `Dataset.csv` is read: 8,790 titles and 10 columns. | Notebook §2 |
+| 2 | Check and clean | There are no empty cells, but `Not Given` marks missing values (29% of directors, 3% of countries). Stray spaces are stripped, 4 duplicate titles are removed (8,786 left) and `show_id` is dropped. | Notebook §3 |
+| 3 | Explore the data | The class balance (70% Movie, 30% TV Show), ratings by type and countries by type are plotted. | Notebook §3 |
+| 4 | Pre-process | `duration` (it gives the answer away) and `title` are dropped. The label is encoded (Movie = 0, TV Show = 1) and the genres are cleaned. The 44 features are built: `release_year`, `year_added`, `has_director`, one-hot ratings and one-hot genres. | Notebook §4 |
+| 5 | Split the data | A stratified train/test split keeps the 70/30 balance in both parts (notebook: 80/20, `training.py`: 85/15, `random_state=42`). | Notebook §4 |
+| 6 | Baseline model | A scaled Logistic Regression already reaches 97.4% test accuracy, so the later steps add only a small gain. | Notebook §5 |
+| 7 | Compare seven models | 5-fold cross-validation on the training set. Support Vector Classifier has the best F1. | Notebook §6 |
+| 8 | Tune the best model | `GridSearchCV` over `C` and `gamma` gives `C=10`, `gamma=0.01`. | Notebook §6 |
+| 9 | Retrain and evaluate | The tuned SVC is fitted on the training set and scored on the test set: 97.9% accuracy on the notebook split, with a confusion matrix and ROC curve. | Notebook §7 |
+| 10 | Try a prediction | `predict_Movie_TVShow()` takes the 44 feature values and prints the class and the probability. It gives 99.01% TV Show for one test show and 0.14% for one test movie. | Notebook §8 |
+| 11 | Move the logic into scripts | `Backend/training.py` repeats the cleaning, feature building, split and final training with the tuned parameters, and saves the pipeline with `joblib`. `Backend/predictor.py` loads it once and turns raw inputs into the 44 features. | `Backend/` |
+| 12 | Serve it with an API | FastAPI exposes `/netflix-type-prediction-system` and checks the input fields. | `Backend/main.py` |
+| 13 | Build the web app | A Streamlit form sends the details to the API and shows the result. | `frontend/app.py` |
+| 14 | Deploy | Both services run in the background on an AWS EC2 instance. | [Running on a server](#running-on-a-server) |
 
 ## Project structure
 
@@ -190,17 +212,25 @@ Open `.env` and set:
 
 All other values can stay as they are. See [Configuration](#configuration) for the full list.
 
-### 3. Start the API
+### 3. Train the model (optional)
 
-The trained model is already included in the repo, so you can skip straight to serving it:
+The trained model is already included in the repo, so you can skip this step. To train it again:
+
+```bash
+python Backend/training.py
+```
+
+See [Retraining the model](#retraining-the-model) for what the script does.
+
+### 4. Start the API
 
 ```bash
 uvicorn Backend.main:app --reload --port 8000
 ```
 
-Interactive API docs are now at <http://127.0.0.1:8000/docs>.
+Interactive API docs are now at <http://127.0.0.1:8000/docs>. To check that the API is up, run `curl http://127.0.0.1:8000/type`. It should return `{"status":"ok"}`.
 
-### 4. Start the web app
+### 5. Start the web app
 
 In a second terminal (with the virtual environment activated):
 
@@ -208,7 +238,18 @@ In a second terminal (with the virtual environment activated):
 streamlit run frontend/app.py
 ```
 
-Open <http://localhost:8501>, enter the title details and click **Predict**. The backend must be running first.
+Open <http://localhost:8501>. The backend must be running first.
+
+### 6. Try a prediction
+
+Enter the details, click **Predict**, and compare with these two examples, which are based on titles from the dataset:
+
+| | Director | Rating | Date Added | Listed in | Release Year | Result |
+| --- | --- | --- | --- | --- | :---: | --- |
+| TV Show | *(leave empty)* | TV-MA | 2020/12/14 | Dramas, Mysteries, Thrillers | 2020 | TV Show (0.99) |
+| Movie | Wael Ehsan | TV-14 | 2020/05/19 | Comedies, Romantic | 2006 | Movie (0.03) |
+
+You can also call the API directly, as shown in the [API reference](#api-reference).
 
 ## API reference
 
@@ -284,16 +325,42 @@ To explore the full workflow (EDA, model comparison, tuning), open `notebook_fil
 
 ## Running on a server
 
-This is how the project runs on an AWS EC2 instance. To keep both services running in the background on a Linux host:
+This is how the project runs on an AWS EC2 instance. The steps below are the usual flow; the exact menus depend on your AWS account and the Linux image you pick.
 
-```bash
-nohup uvicorn Backend.main:app --host 0.0.0.0 --port 8000 > uvicorn.log 2>&1 &
-nohup streamlit run frontend/app.py --server.port 8501 --server.address 0.0.0.0 > streamlit.log 2>&1 &
-```
+1. **Launch a Linux EC2 instance** and download its key pair.
+2. **Open the ports** in the instance's security group: SSH (port `22`, ideally only from your own IP) and `8501` for the web app. Open `8000` only if you want the API itself to be public.
+3. **Connect over SSH** using the key pair.
+4. **Install Python 3.12 or newer and Git** on the server.
+5. **Clone the repo and install the packages:**
 
-Follow the logs with `tail -f uvicorn.log` and `tail -f streamlit.log`, and check that both are running with `ps aux | grep uvicorn` and `ps aux | grep streamlit`. The same commands are saved in `EC2_API_streamlit_commands.txt`.
+   ```bash
+   git clone https://github.com/bharathhottin/Netflix_Content_Type_Predictor_System.git
+   cd Netflix_Content_Type_Predictor_System
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   ```
 
-Set `API_URL` in `.env` to the address where the API is reachable from the Streamlit process. If both services run on the same machine, keep `API_URL` pointing at `127.0.0.1:8000` and only open port `8501` to the public. Folder names are case-sensitive on Linux, so write `frontend/app.py` and `Dataset` exactly as shown.
+6. **Create the `.env` file** (`cp env_template.txt .env`) and set `PROJECT_ROOT` to the folder on the server, `DATASET_DIR=Dataset` and `TARGET_COL=type`. Keep `API_URL` pointing at `127.0.0.1:8000` because both services run on the same machine.
+7. **Start both services in the background:**
+
+   ```bash
+   nohup uvicorn Backend.main:app --host 0.0.0.0 --port 8000 > uvicorn.log 2>&1 &
+   nohup streamlit run frontend/app.py --server.port 8501 --server.address 0.0.0.0 > streamlit.log 2>&1 &
+   ```
+
+8. **Check that they are running:**
+
+   ```bash
+   tail -f uvicorn.log
+   tail -f streamlit.log
+   ps aux | grep uvicorn
+   ps aux | grep streamlit
+   ```
+
+9. **Open the app** at `http://<public-ip-of-the-instance>:8501`.
+
+To update the app later, run `git pull`, stop the two processes (find their numbers with `ps aux | grep`, then `kill <PID>`) and start them again with the commands from step 7. The same commands are saved in `EC2_API_streamlit_commands.txt`. Folder names are case-sensitive on Linux, so write `frontend/app.py` and `Dataset` exactly as shown.
 
 ## Limitations
 
